@@ -1,6 +1,10 @@
 """
-Abstract base class for screener conditions.
-Every condition module must subclass this.
+Base class for screener conditions.
+Each condition belongs to a category: 'driver' or 'validation'.
+
+Driver conditions are combined with AND or OR (configurable).
+Validation conditions are always combined with AND.
+Signal = (Drivers combined) AND (all Validators pass)
 """
 
 from abc import ABC, abstractmethod
@@ -8,43 +12,33 @@ import pandas as pd
 
 
 class Condition(ABC):
-    """
-    A single screening condition (e.g., RSI threshold, EMA crossover).
-
-    To add a new condition:
-    1. Create a new .py file in this directory
-    2. Subclass Condition
-    3. Implement name, check_buy(), check_sell()
-    4. It will be auto-discovered and registered.
-    """
+    """Abstract base class that every condition must implement."""
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Human-readable name of this condition."""
+        """Human-readable name for this condition."""
         ...
+
+    @property
+    def category(self) -> str:
+        """
+        Category of this condition: 'driver' or 'validation'.
+        Override in subclass. Defaults to 'validation'.
+        """
+        return "validation"
 
     @abstractmethod
     def check_buy(self, data: pd.DataFrame, config: dict) -> bool:
-        """
-        Return True if the BUY condition is met on the latest bar.
-
-        Args:
-            data: OHLCV DataFrame with calculated indicators attached.
-            config: Current config dict (e.g., {"rsi_period": "14", ...}).
-        """
+        """Return True if the BUY condition is met on the latest bar."""
         ...
 
     @abstractmethod
     def check_sell(self, data: pd.DataFrame, config: dict) -> bool:
-        """
-        Return True if the SELL condition is met on the latest bar.
-        """
+        """Return True if the SELL condition is met on the latest bar."""
         ...
 
+    @abstractmethod
     def get_values(self, data: pd.DataFrame, config: dict) -> dict:
-        """
-        Return indicator values relevant to this condition for logging.
-        Override this to provide values that get stored in TrackingEntry.
-        """
-        return {}
+        """Return a dict of indicator values for logging/display."""
+        ...

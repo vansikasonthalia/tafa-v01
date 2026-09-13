@@ -19,16 +19,16 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 async def upload_watchlist(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
     Upload a .csv or .xlsx file containing stock tickers.
-    Expects a column named 'ticker' or symbols in the first column.
+    Expects columns: 'symbol' (or 'ticker'), optionally 'company name' and 'industry'.
     New tickers are added; duplicates are silently skipped.
     """
     filename = file.filename or ""
     content = await file.read()
 
-    tickers = []
+    # Each entry: { "ticker": str, "company_name": str|None, "industry": str|None }
+    entries = []
 
     if filename.endswith(".xlsx"):
-        # Parse Excel
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
@@ -42,12 +42,19 @@ async def upload_watchlist(file: UploadFile = File(...), db: Session = Depends(g
             elif "symbol" in headers:
                 ticker_col = headers.index("symbol")
             else:
-                ticker_col = 0  # Default to first column
+                ticker_col = 0
+
+            name_col = headers.index("company name") if "company name" in headers else None
+            industry_col = headers.index("industry") if "industry" in headers else None
 
             for row in ws.iter_rows(min_row=2):
                 val = row[ticker_col].value
                 if val and str(val).strip():
-                    tickers.append(str(val).strip().upper())
+                    entries.append({
+                        "ticker": str(val).strip().upper(),
+                        "company_name": str(row[name_col].value).strip() if name_col is not None and row[name_col].value else None,
+                        "industry": str(row[industry_col].value).strip() if industry_col is not None and row[industry_col].value else None,
+                    })
 
             wb.close()
         except Exception as e:
@@ -68,35 +75,50 @@ async def upload_watchlist(file: UploadFile = File(...), db: Session = Depends(g
             else:
                 ticker_col = 0
 
+            name_col = headers.index("company name") if "company name" in headers else None
+            industry_col = headers.index("industry") if "industry" in headers else None
+
             for row in reader:
                 if row and len(row) > ticker_col:
                     val = row[ticker_col].strip()
                     if val and val.upper() not in ("TICKER", "SYMBOL", ""):
-                        tickers.append(val.upper())
+                        company_name = None
+                        industry = None
+                        if name_col is not None and len(row) > name_col:
+                            company_name = row[name_col].strip() or None
+                        if industry_col is not None and len(row) > industry_col:
+                            industry = row[industry_col].strip() or None
+
+                        entries.append({
+                            "ticker": val.upper(),
+                            "company_name": company_name,
+                            "industry": industry,
+                        })
 
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse CSV file: {str(e)}")
 
-    if not tickers:
+    if not entries:
         raise HTTPException(status_code=400, detail="No tickers found in the uploaded file.")
 
     # Auto-append .NS for Indian stocks if no suffix exists (Yahoo Finance compatibility)
-    cleaned_tickers = []
-    for t in tickers:
-        if "." not in t:
-            t = f"{t}.NS"
-        cleaned_tickers.append(t)
-    tickers = cleaned_tickers
+    for entry in entries:
+        if "." not in entry["ticker"]:
+            entry["ticker"] = f"{entry['ticker']}.NS"
 
     # Add new tickers, skip duplicates
     added = 0
     skipped = 0
-    for ticker in tickers:
-        existing = db.query(Watchlist).filter(func.upper(Watchlist.ticker) == ticker).first()
+    for entry in entries:
+        existing = db.query(Watchlist).filter(func.upper(Watchlist.ticker) == entry["ticker"]).first()
         if existing:
             skipped += 1
         else:
-            db.add(Watchlist(ticker=ticker))
+            db.add(Watchlist(
+                ticker=entry["ticker"],
+                company_name=entry["company_name"],
+                industry=entry["industry"],
+            ))
             added += 1
 
     db.commit()
@@ -107,7 +129,6 @@ async def upload_watchlist(file: UploadFile = File(...), db: Session = Depends(g
         "added": added,
         "skipped": skipped,
         "total": total,
-        "tickers": tickers,
     }
 
 

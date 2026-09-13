@@ -1,5 +1,6 @@
 """
 Screener router — run the screener manually and check scheduler status.
+Uses Driver/Validation condition split with configurable AND/OR logic.
 """
 
 from fastapi import APIRouter, Depends
@@ -9,6 +10,7 @@ from ..database import get_db
 from ..models import Watchlist, Config, TrackingEntry, DEFAULT_CONFIG
 from ..services.data_fetcher import get_fetcher
 from ..services.conditions import get_all_conditions
+from ..services.fundamental import fetch_fundamentals
 from ..services.scheduler import get_scheduler_status
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
@@ -18,7 +20,8 @@ router = APIRouter(prefix="/api/screener", tags=["screener"])
 def run_screener(db: Session = Depends(get_db)):
     """
     Manually run the screener on all watchlist tickers.
-    Fetches data, applies all conditions, saves signals.
+    Signal logic: (Driver conditions [AND/OR]) AND (all Validation conditions)
+    Then fetches fundamental data for matched stocks.
     """
     # Get config
     config_rows = db.query(Config).all()
@@ -37,18 +40,29 @@ def run_screener(db: Session = Depends(get_db)):
 
     fetcher = get_fetcher(config.get("data_source", "yahoo"))
     conditions = get_all_conditions()
+
+    # Split conditions into driver and validation
+    drivers = [c for c in conditions if c.category == "driver"]
+    validators = [c for c in conditions if c.category == "validation"]
+    driver_logic = config.get("driver_logic", "and")
+
     signals = []
     errors = []
 
+    # Bulk download all ticker data at once
+    print(f"[Screener] Fetching data for {len(tickers)} tickers in bulk...")
+    all_data = fetcher.fetch_bulk(
+        tickers,
+        period="2y",
+        interval=config.get("timeframe", "1wk"),
+    )
+    print(f"[Screener] Got data for {len(all_data)}/{len(tickers)} tickers.")
+
     for ticker in tickers:
         try:
-            data = fetcher.fetch_ohlcv(
-                ticker,
-                period="2y",
-                interval=config.get("timeframe", "1wk"),
-            )
+            data = all_data.get(ticker)
 
-            if data.empty:
+            if data is None or data.empty:
                 errors.append({"ticker": ticker, "error": "No data returned"})
                 continue
 
@@ -56,9 +70,25 @@ def run_screener(db: Session = Depends(get_db)):
                 errors.append({"ticker": ticker, "error": f"Insufficient data ({len(data)} bars)"})
                 continue
 
-            # Check all conditions
-            all_buy = all(c.check_buy(data, config) for c in conditions)
-            all_sell = all(c.check_sell(data, config) for c in conditions)
+            # --- Driver conditions (AND or OR) ---
+            if drivers:
+                if driver_logic == "or":
+                    driver_buy = any(c.check_buy(data, config) for c in drivers)
+                    driver_sell = any(c.check_sell(data, config) for c in drivers)
+                else:
+                    driver_buy = all(c.check_buy(data, config) for c in drivers)
+                    driver_sell = all(c.check_sell(data, config) for c in drivers)
+            else:
+                driver_buy = True
+                driver_sell = True
+
+            # --- Validation conditions (always AND) ---
+            validation_buy = all(c.check_buy(data, config) for c in validators)
+            validation_sell = all(c.check_sell(data, config) for c in validators)
+
+            # --- Final signal = Driver AND Validation ---
+            all_buy = driver_buy and validation_buy
+            all_sell = driver_sell and validation_sell
 
             if all_buy or all_sell:
                 signal = "BUY" if all_buy else "SELL"
@@ -67,6 +97,9 @@ def run_screener(db: Session = Depends(get_db)):
                 values = {}
                 for c in conditions:
                     values.update(c.get_values(data, config))
+
+                # Fetch fundamental data for this matched stock
+                fundamentals = fetch_fundamentals(ticker)
 
                 entry = TrackingEntry(
                     ticker=ticker,
@@ -77,6 +110,12 @@ def run_screener(db: Session = Depends(get_db)):
                     wma_value=values.get("wma_value"),
                     ema_rsi=values.get("ema_rsi"),
                     wma_rsi=values.get("wma_rsi"),
+                    market_cap=fundamentals.get("market_cap"),
+                    pe_ratio=fundamentals.get("pe_ratio"),
+                    sales_growth_3yr=fundamentals.get("sales_growth_3yr"),
+                    profit_growth_3yr=fundamentals.get("profit_growth_3yr"),
+                    annual_sales=fundamentals.get("annual_sales"),
+                    mcap_sales_ratio=fundamentals.get("mcap_sales_ratio"),
                     run_type="manual",
                 )
                 db.add(entry)
@@ -101,8 +140,10 @@ def run_screener(db: Session = Depends(get_db)):
     return {
         "signals": signals,
         "tickers_scanned": len(tickers),
+        "data_fetched": len(all_data),
         "errors": errors,
         "conditions_checked": [c.name for c in conditions],
+        "driver_logic": driver_logic,
     }
 
 

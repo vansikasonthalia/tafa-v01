@@ -1,8 +1,9 @@
 """
 Data fetcher abstraction.
-V1 supports Yahoo Finance only. Designed for easy addition of Kite data source later.
+V1 supports Yahoo Finance via bulk download. Designed for easy addition of Kite data source later.
 """
 
+import time
 import yfinance as yf
 import pandas as pd
 from abc import ABC, abstractmethod
@@ -14,38 +15,138 @@ class DataFetcher(ABC):
     @abstractmethod
     def fetch_ohlcv(self, ticker: str, period: str, interval: str) -> pd.DataFrame:
         """
-        Fetch OHLCV data for a ticker.
-
-        Args:
-            ticker: Stock ticker symbol (e.g., "RELIANCE.NS" for NSE)
-            period: Lookback period (e.g., "2y" for 2 years)
-            interval: Bar interval (e.g., "1wk" for weekly)
+        Fetch OHLCV data for a single ticker.
 
         Returns:
             DataFrame with columns: Open, High, Low, Close, Volume
         """
         ...
 
+    def fetch_bulk(self, tickers: list[str], period: str, interval: str) -> dict[str, pd.DataFrame]:
+        """
+        Fetch OHLCV data for multiple tickers at once.
+        Default implementation calls fetch_ohlcv in a loop.
+        """
+        result = {}
+        for ticker in tickers:
+            df = self.fetch_ohlcv(ticker, period, interval)
+            if not df.empty:
+                result[ticker] = df
+        return result
+
+
+def _flatten_columns(df: pd.DataFrame, ticker: str = None) -> pd.DataFrame:
+    """
+    Handle yfinance v1.7+ multi-level columns.
+    Converts (Price, Ticker) multi-index to flat column names.
+    """
+    if isinstance(df.columns, pd.MultiIndex):
+        # yfinance v1.7 returns columns like (Close, RELIANCE.NS)
+        # We want just: Close, Open, High, Low, Volume
+        df.columns = df.columns.get_level_values(0)
+
+    # Ensure we have standard OHLCV columns
+    required = ["Open", "High", "Low", "Close", "Volume"]
+    available = [c for c in required if c in df.columns]
+    if not available:
+        return pd.DataFrame()
+
+    df = df[available].copy()
+    df.dropna(subset=["Close"], inplace=True)
+    return df
+
 
 class YahooFetcher(DataFetcher):
-    """Fetches data from Yahoo Finance (free, no API key needed)."""
+    """
+    Fetches data from Yahoo Finance using yfinance v1.7+.
+    Uses curl_cffi internally for better bot-detection bypass.
+    """
+
+    BATCH_SIZE = 50
 
     def fetch_ohlcv(self, ticker: str, period: str = "2y", interval: str = "1wk") -> pd.DataFrame:
+        """Fetch data for a single ticker."""
         try:
-            stock = yf.Ticker(ticker)
-            df = stock.history(period=period, interval=interval)
+            df = yf.download(
+                ticker,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+            )
 
             if df.empty:
                 return pd.DataFrame()
 
-            # Standardize column names
-            df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-            df.dropna(inplace=True)
-            return df
+            return _flatten_columns(df, ticker)
 
         except Exception as e:
             print(f"[YahooFetcher] Error fetching {ticker}: {e}")
             return pd.DataFrame()
+
+    def fetch_bulk(self, tickers: list[str], period: str = "2y", interval: str = "1wk") -> dict[str, pd.DataFrame]:
+        """
+        Fetch data for ALL tickers using yf.download() in batches.
+        """
+        all_data = {}
+        total = len(tickers)
+
+        for i in range(0, total, self.BATCH_SIZE):
+            batch = tickers[i : i + self.BATCH_SIZE]
+            batch_num = (i // self.BATCH_SIZE) + 1
+            total_batches = (total + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+            print(f"[YahooFetcher] Downloading batch {batch_num}/{total_batches} ({len(batch)} tickers)...")
+
+            try:
+                raw = yf.download(
+                    batch,
+                    period=period,
+                    interval=interval,
+                    group_by="ticker",
+                    progress=False,
+                    auto_adjust=True,
+                    threads=True,
+                )
+
+                if raw.empty:
+                    print(f"[YahooFetcher] Batch {batch_num} returned empty data.")
+                    continue
+
+                if len(batch) == 1:
+                    ticker = batch[0]
+                    df = _flatten_columns(raw.copy(), ticker)
+                    if not df.empty:
+                        all_data[ticker] = df
+                else:
+                    for ticker in batch:
+                        try:
+                            # In multi-ticker mode, top-level columns are tickers
+                            if ticker in raw.columns.get_level_values(0):
+                                df = raw[ticker].copy()
+                            elif isinstance(raw.columns, pd.MultiIndex) and ticker in raw.columns.get_level_values(1):
+                                # Alternative: columns might be (Price, Ticker)
+                                df = raw.xs(ticker, level=1, axis=1).copy()
+                            else:
+                                continue
+
+                            df = _flatten_columns(df, ticker)
+                            if not df.empty:
+                                all_data[ticker] = df
+                        except (KeyError, TypeError) as e:
+                            print(f"[YahooFetcher] Could not extract data for {ticker}: {e}")
+                            continue
+
+            except Exception as e:
+                print(f"[YahooFetcher] Batch {batch_num} failed: {e}")
+                continue
+
+            # Brief pause between batches
+            if i + self.BATCH_SIZE < total:
+                time.sleep(2)
+
+        print(f"[YahooFetcher] Successfully fetched data for {len(all_data)}/{total} tickers.")
+        return all_data
 
 
 # --- Factory ---

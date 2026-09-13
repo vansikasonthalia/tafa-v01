@@ -49,30 +49,57 @@ def _run_screener_job():
 
             fetcher = get_fetcher(config.get("data_source", "yahoo"))
             conditions = get_all_conditions()
+            from ..services.fundamental import fetch_fundamentals
+
+            # Split conditions into driver and validation
+            drivers = [c for c in conditions if c.category == "driver"]
+            validators = [c for c in conditions if c.category == "validation"]
+            driver_logic = config.get("driver_logic", "and")
             signals = []
+
+            # Bulk download all ticker data at once
+            print(f"[Scheduler] Fetching data for {len(tickers)} tickers in bulk...")
+            all_data = fetcher.fetch_bulk(
+                tickers,
+                period="2y",
+                interval=config.get("timeframe", "1wk"),
+            )
+            print(f"[Scheduler] Got data for {len(all_data)}/{len(tickers)} tickers.")
 
             for ticker in tickers:
                 try:
-                    data = fetcher.fetch_ohlcv(
-                        ticker,
-                        period="2y",
-                        interval=config.get("timeframe", "1wk"),
-                    )
+                    data = all_data.get(ticker)
 
-                    if data.empty or len(data) < 30:
+                    if data is None or data.empty or len(data) < 30:
                         continue
 
-                    # Check all conditions
-                    all_buy = all(c.check_buy(data, config) for c in conditions)
-                    all_sell = all(c.check_sell(data, config) for c in conditions)
+                    # Driver conditions (AND or OR)
+                    if drivers:
+                        if driver_logic == "or":
+                            driver_buy = any(c.check_buy(data, config) for c in drivers)
+                            driver_sell = any(c.check_sell(data, config) for c in drivers)
+                        else:
+                            driver_buy = all(c.check_buy(data, config) for c in drivers)
+                            driver_sell = all(c.check_sell(data, config) for c in drivers)
+                    else:
+                        driver_buy = True
+                        driver_sell = True
+
+                    # Validation conditions (always AND)
+                    validation_buy = all(c.check_buy(data, config) for c in validators)
+                    validation_sell = all(c.check_sell(data, config) for c in validators)
+
+                    all_buy = driver_buy and validation_buy
+                    all_sell = driver_sell and validation_sell
 
                     if all_buy or all_sell:
                         signal = "BUY" if all_buy else "SELL"
 
-                        # Gather indicator values from all conditions
                         values = {}
                         for c in conditions:
                             values.update(c.get_values(data, config))
+
+                        fundamentals = fetch_fundamentals(ticker)
 
                         entry = TrackingEntry(
                             ticker=ticker,
@@ -83,6 +110,12 @@ def _run_screener_job():
                             wma_value=values.get("wma_value"),
                             ema_rsi=values.get("ema_rsi"),
                             wma_rsi=values.get("wma_rsi"),
+                            market_cap=fundamentals.get("market_cap"),
+                            pe_ratio=fundamentals.get("pe_ratio"),
+                            sales_growth_3yr=fundamentals.get("sales_growth_3yr"),
+                            profit_growth_3yr=fundamentals.get("profit_growth_3yr"),
+                            annual_sales=fundamentals.get("annual_sales"),
+                            mcap_sales_ratio=fundamentals.get("mcap_sales_ratio"),
                             run_type="scheduled",
                         )
                         db.add(entry)

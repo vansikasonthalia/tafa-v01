@@ -6,13 +6,13 @@ import { usePathname } from 'next/navigation';
 const NAV_ITEMS = [
   {
     href: '/',
-    title: 'Screener',
-    subtitle: 'Run rules, review hits',
+    title: 'Stocklist',
+    subtitle: 'Upload & manage universe',
   },
   {
-    href: '/tracking',
-    title: 'Tracking sheet',
-    subtitle: 'Buy / sell log + charts',
+    href: '/recommendations',
+    title: 'Recommendations',
+    subtitle: 'Buy / sell signals log',
   },
   {
     href: '/approvals',

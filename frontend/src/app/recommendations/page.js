@@ -10,7 +10,7 @@ const TABS = [
   { label: 'Sell', value: 'SELL' },
 ];
 
-export default function TrackingPage() {
+export default function RecommendationsPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,7 +22,7 @@ export default function TrackingPage() {
       const data = await getTrackingEntries(signal);
       setEntries(data.entries || []);
     } catch (err) {
-      console.error('Failed to load tracking entries:', err);
+      console.error('Failed to load entries:', err);
     } finally {
       setLoading(false);
     }
@@ -58,9 +58,10 @@ export default function TrackingPage() {
     <>
       <div className="page-header">
         <div className="page-header-text">
-          <h2>Tracking sheet</h2>
+          <h2>Recommendations</h2>
           <p>
-            Every buy/sell recommendation, stamped with the chart at signal time.
+            Every buy/sell recommendation the screener generates, stamped with
+            indicator values at signal time.
           </p>
         </div>
         <FilterTabs tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
@@ -78,6 +79,7 @@ export default function TrackingPage() {
                 <th>Ticker</th>
                 <th>Signal</th>
                 <th>Price</th>
+                <th>Mkt Cap (Cr)</th>
                 <th>RSI</th>
                 <th>EMA(RSI)</th>
                 <th>WMA(RSI)</th>
@@ -96,6 +98,7 @@ export default function TrackingPage() {
                     </span>
                   </td>
                   <td>{entry.price?.toFixed(2) || '—'}</td>
+                  <td>{entry.market_cap ? `${entry.market_cap.toLocaleString()}` : '—'}</td>
                   <td>{entry.rsi || '—'}</td>
                   <td>{entry.ema_rsi || '—'}</td>
                   <td>{entry.wma_rsi || '—'}</td>
@@ -136,8 +139,8 @@ export default function TrackingPage() {
         <div className="empty-state">
           <div className="empty-state-icon">📝</div>
           <p>
-            No recommendations logged yet. They appear here automatically when
-            the screener fires a signal.
+            No recommendations yet. They appear here automatically when
+            the screener fires a buy or sell signal.
           </p>
         </div>
       )}
