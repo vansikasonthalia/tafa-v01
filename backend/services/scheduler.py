@@ -119,6 +119,20 @@ def _run_screener_job():
                             run_type="scheduled",
                         )
                         db.add(entry)
+                        
+                        entry_dict = {
+                            "ticker": ticker,
+                            "signal": signal,
+                            "price": values.get("price"),
+                            "rsi": values.get("rsi"),
+                            "market_cap": fundamentals.get("market_cap"),
+                            "pe_ratio": fundamentals.get("pe_ratio"),
+                            "run_type": "scheduled",
+                        }
+                        
+                        from ..services.telegram import send_telegram_alert
+                        send_telegram_alert(entry_dict)
+                        
                         signals.append({"ticker": ticker, "signal": signal})
 
                 except Exception as e:

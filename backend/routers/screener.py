@@ -119,6 +119,20 @@ def run_screener(db: Session = Depends(get_db)):
                     run_type="manual",
                 )
                 db.add(entry)
+                
+                entry_dict = {
+                    "ticker": ticker,
+                    "signal": signal,
+                    "price": values.get("price"),
+                    "rsi": values.get("rsi"),
+                    "market_cap": fundamentals.get("market_cap"),
+                    "pe_ratio": fundamentals.get("pe_ratio"),
+                    "run_type": "manual",
+                }
+                
+                from ..services.telegram import send_telegram_alert
+                send_telegram_alert(entry_dict)
+                
                 signals.append(entry.to_dict())
 
         except Exception as e:
