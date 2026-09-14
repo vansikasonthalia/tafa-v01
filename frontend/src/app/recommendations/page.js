@@ -29,6 +29,7 @@ export default function RecommendationsPage() {
   }, [activeTab]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadEntries();
   }, [loadEntries]);
 

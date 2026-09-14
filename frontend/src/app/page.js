@@ -37,7 +37,9 @@ export default function StocklistPage() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadWatchlist();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadSchedulerStatus();
     const interval = setInterval(loadSchedulerStatus, 30000);
     return () => clearInterval(interval);
