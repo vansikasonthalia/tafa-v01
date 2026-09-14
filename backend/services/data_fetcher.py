@@ -4,9 +4,16 @@ V1 supports Yahoo Finance via bulk download. Designed for easy addition of Kite 
 """
 
 import time
+import requests
 import yfinance as yf
 import pandas as pd
 from abc import ABC, abstractmethod
+
+# Create a shared session to reuse connections and spoof User-Agent
+_yf_session = requests.Session()
+_yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 
 
 class DataFetcher(ABC):
@@ -74,6 +81,7 @@ class YahooFetcher(DataFetcher):
                 progress=False,
                 auto_adjust=True,
                 threads=False,
+                session=_yf_session,
             )
 
             if df.empty:
@@ -107,6 +115,7 @@ class YahooFetcher(DataFetcher):
                     progress=False,
                     auto_adjust=True,
                     threads=True,
+                    session=_yf_session,
                 )
 
                 if raw.empty:
